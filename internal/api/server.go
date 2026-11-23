@@ -76,15 +76,50 @@ func (s *Server) Handler() http.Handler {
 		w.Header().Set("Content-Type", "application/yaml")
 		_, _ = w.Write(apispec.OpenAPI)
 	})
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		mw.WriteError(w, r, http.StatusNotFound, "not_found", "resource not found", nil)
-	})
 
-	var h http.Handler = mux
+	var h http.Handler = jsonRoutingErrors(mux)
 	h = mw.LimitBody(s.cfg.MaxBodyBytes)(h)
 	h = mw.SecurityHeaders(h)
 	h = mw.Observe(s.log, s.metrics)(h)
 	return h
+}
+
+// jsonRoutingErrors converts the ServeMux's plain-text 404 and 405 replies
+// into the standard JSON error envelope (the Allow header is preserved).
+func jsonRoutingErrors(mux *http.ServeMux) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if _, pattern := mux.Handler(r); pattern != "" {
+			mux.ServeHTTP(w, r)
+			return
+		}
+		mux.ServeHTTP(&routingErrorWriter{ResponseWriter: w, r: r}, r)
+	})
+}
+
+type routingErrorWriter struct {
+	http.ResponseWriter
+	r         *http.Request
+	rewritten bool
+}
+
+func (w *routingErrorWriter) WriteHeader(code int) {
+	switch code {
+	case http.StatusNotFound:
+		w.rewritten = true
+		mw.WriteError(w.ResponseWriter, w.r, code, "not_found", "resource not found", nil)
+	case http.StatusMethodNotAllowed:
+		w.rewritten = true
+		mw.WriteError(w.ResponseWriter, w.r, code, "method_not_allowed", "method not allowed for this resource", nil)
+	default:
+		w.ResponseWriter.WriteHeader(code)
+	}
+}
+
+func (w *routingErrorWriter) Write(b []byte) (int, error) {
+	if w.rewritten {
+		return len(b), nil
+	}
+	return w.ResponseWriter.Write(b)
 }
 
 func (s *Server) health(w http.ResponseWriter, _ *http.Request) {

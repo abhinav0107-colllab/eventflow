@@ -546,7 +546,7 @@ components:
               type: string
               enum: [invalid_request, invalid_json, invalid_id, invalid_query, unauthorized, not_found,
                      validation_failed, idempotency_conflict, invalid_state, payload_too_large,
-                     unavailable, internal_error]
+                     unavailable, internal_error, method_not_allowed]
             message: {type: string}
             request_id: {type: string}
             details: {description: Optional structured details (e.g. field errors).}
