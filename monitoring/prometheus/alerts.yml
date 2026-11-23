@@ -1,0 +1,46 @@
+groups:
+  - name: eventflow
+    rules:
+      - alert: EventFlowNoActiveWorkers
+        expr: eventflow_active_workers == 0
+        for: 2m
+        labels: {severity: critical}
+        annotations:
+          summary: No EventFlow workers are heart-beating.
+
+      - alert: EventFlowOutboxStalled
+        expr: eventflow_outbox_oldest_due_age_seconds > 60
+        for: 2m
+        labels: {severity: critical}
+        annotations:
+          summary: Outbox events are not being published (oldest due event older than 60s).
+
+      - alert: EventFlowDeadLetterGrowth
+        expr: increase(eventflow_jobs_dead_lettered_total[15m]) > 10
+        labels: {severity: warning}
+        annotations:
+          summary: More than 10 jobs were dead-lettered in the last 15 minutes.
+
+      - alert: EventFlowQueueBacklog
+        expr: sum(eventflow_queue_depth) > 10000
+        for: 10m
+        labels: {severity: warning}
+        annotations:
+          summary: Queue depth has exceeded 10k messages for 10 minutes.
+
+      - alert: EventFlowHighAttemptFailureRate
+        expr: |
+          sum(rate(eventflow_job_attempt_failures_total[5m]))
+            / clamp_min(sum(rate(eventflow_jobs_succeeded_total[5m])) + sum(rate(eventflow_job_attempt_failures_total[5m])), 1e-9)
+            > 0.2
+        for: 10m
+        labels: {severity: warning}
+        annotations:
+          summary: More than 20% of job attempts are failing.
+
+      - alert: EventFlowWorkerInfrastructureErrors
+        expr: sum by (reason) (rate(eventflow_worker_failures_total[5m])) > 0.5
+        for: 5m
+        labels: {severity: warning}
+        annotations:
+          summary: Workers report sustained infrastructure errors ({{ $labels.reason }}).
