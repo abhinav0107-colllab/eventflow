@@ -1,0 +1,5 @@
+DROP TABLE IF EXISTS workers;
+DROP TABLE IF EXISTS outbox_events;
+DROP TABLE IF EXISTS job_attempts;
+DROP TABLE IF EXISTS jobs;
+DROP TABLE IF EXISTS api_keys;
