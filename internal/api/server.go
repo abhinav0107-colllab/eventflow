@@ -77,7 +77,7 @@ func (s *Server) Handler() http.Handler {
 		_, _ = w.Write(apispec.OpenAPI)
 	})
 
-	var h http.Handler = jsonRoutingErrors(mux)
+	h := jsonRoutingErrors(mux)
 	h = mw.LimitBody(s.cfg.MaxBodyBytes)(h)
 	h = mw.SecurityHeaders(h)
 	h = mw.Observe(s.log, s.metrics)(h)

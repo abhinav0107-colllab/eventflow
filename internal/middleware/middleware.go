@@ -121,7 +121,7 @@ func Observe(log *slog.Logger, m *observability.Metrics) func(http.Handler) http
 
 			defer func() {
 				if p := recover(); p != nil {
-					if p == http.ErrAbortHandler {
+					if err, ok := p.(error); ok && errors.Is(err, http.ErrAbortHandler) {
 						panic(p)
 					}
 					log.Error("panic serving request", "request_id", id, "panic", slog.AnyValue(p).String())
@@ -180,7 +180,7 @@ type Authenticator interface {
 
 // APIKeyHeader is the authentication header. "Authorization: Bearer <key>"
 // is accepted as well.
-const APIKeyHeader = "X-API-Key"
+const APIKeyHeader = "X-API-Key" //nolint:gosec // G101 false positive: a header name, not a credential
 
 // RequireAPIKey rejects requests without a valid API key.
 func RequireAPIKey(a Authenticator, log *slog.Logger) func(http.Handler) http.Handler {

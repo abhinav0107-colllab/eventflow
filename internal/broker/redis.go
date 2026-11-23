@@ -11,6 +11,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -316,9 +317,9 @@ func compareIDs(a, b string) int {
 }
 
 func splitID(id string) (uint64, uint64) {
-	var ms, seq uint64
 	ts, s, _ := strings.Cut(id, "-")
-	fmt.Sscan(ts, &ms)
-	fmt.Sscan(s, &seq)
+	// Malformed parts compare as 0; IDs come from Redis and are well formed.
+	ms, _ := strconv.ParseUint(ts, 10, 64)
+	seq, _ := strconv.ParseUint(s, 10, 64)
 	return ms, seq
 }

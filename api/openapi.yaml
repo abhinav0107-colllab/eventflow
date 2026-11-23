@@ -16,8 +16,6 @@ info:
 
     **Errors** use a consistent envelope (`Error` schema) and always carry the
     request ID that is also returned in the `X-Request-ID` header.
-  license:
-    name: MIT
 servers:
   - url: http://localhost:8080
     description: Local Docker Compose stack

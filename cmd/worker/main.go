@@ -4,6 +4,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"os/signal"
@@ -26,7 +27,7 @@ var version = "dev"
 
 func main() {
 	if err := run(); err != nil {
-		os.Stderr.WriteString("eventflow-worker: " + err.Error() + "\n")
+		fmt.Fprintln(os.Stderr, "eventflow-worker:", err)
 		os.Exit(1)
 	}
 }
