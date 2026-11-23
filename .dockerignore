@@ -1,0 +1,11 @@
+.git
+.github
+bin
+dist
+docs
+loadtest
+monitoring
+*.md
+.env
+.env.*
+coverage.*

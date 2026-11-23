@@ -9,6 +9,10 @@ BEGIN
             ON jobs, job_attempts, outbox_events, workers TO eventflow_app;
         GRANT SELECT, INSERT, UPDATE ON api_keys TO eventflow_app;
         GRANT SELECT ON schema_migrations TO eventflow_app;
+        -- Default privileges (see init-roles.sh) may have granted more;
+        -- the runtime role must never alter migration history or delete keys.
+        REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON schema_migrations FROM eventflow_app;
+        REVOKE DELETE, TRUNCATE ON api_keys FROM eventflow_app;
         GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO eventflow_app;
     END IF;
 END
