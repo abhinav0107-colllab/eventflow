@@ -1,0 +1,552 @@
+openapi: 3.0.3
+info:
+  title: EventFlow API
+  version: 1.0.0
+  description: |
+    EventFlow is a distributed asynchronous job processing platform.
+
+    Clients submit jobs over this API. Jobs are persisted in PostgreSQL (the
+    source of truth), announced through a transactional outbox to Redis
+    Streams, and executed by a pool of workers with at-least-once delivery,
+    retries with exponential backoff, dead-lettering and lease-based crash
+    recovery.
+
+    **Authentication**: every `/api/v1` route requires an API key, sent either
+    as `X-API-Key: <key>` or `Authorization: Bearer <key>`.
+
+    **Errors** use a consistent envelope (`Error` schema) and always carry the
+    request ID that is also returned in the `X-Request-ID` header.
+  license:
+    name: MIT
+servers:
+  - url: http://localhost:8080
+    description: Local Docker Compose stack
+security:
+  - ApiKeyHeader: []
+  - BearerAuth: []
+tags:
+  - name: Jobs
+  - name: Operations
+  - name: Probes
+paths:
+  /api/v1/jobs:
+    post:
+      tags: [Jobs]
+      summary: Submit a job
+      description: |
+        Persists the job and its outbox event atomically. The job starts in
+        `pending` and becomes `queued` once the outbox relay has published it
+        (immediately, or at `scheduled_at` for delayed jobs).
+
+        **Idempotency**: supply an idempotency key (header or body). Repeating
+        the same request with the same key returns the original job with
+        status `200` and `Idempotent-Replayed: true`. Reusing a key with a
+        different request returns `409`. Keys are scoped to the API key.
+      operationId: createJob
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/CreateJobRequest'}
+            examples:
+              email:
+                summary: Simulated email
+                value:
+                  type: EMAIL_SIMULATION
+                  payload: {to: user@example.com, subject: Welcome, body: Hello!}
+                  priority: 8
+              delayed:
+                summary: Run in 60 seconds with a 5 minute timeout
+                value:
+                  type: DELAYED_TASK
+                  payload: {duration_ms: 2000, message: nightly export}
+                  delay_seconds: 60
+                  timeout_seconds: 300
+              failing:
+                summary: Exercise retries and the dead-letter queue
+                value:
+                  type: DELIBERATE_FAILURE
+                  payload: {mode: always}
+                  max_attempts: 4
+      responses:
+        '201':
+          description: Job created.
+          headers:
+            Location: {schema: {type: string}, description: URL of the new job.}
+            X-Request-ID: {$ref: '#/components/headers/RequestID'}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Job'}
+        '200':
+          description: Idempotent replay; the previously created job is returned.
+          headers:
+            Idempotent-Replayed: {schema: {type: string, enum: ['true']}}
+            Location: {schema: {type: string}}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Job'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '409':
+          description: Idempotency key reused with a different request.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '413': {$ref: '#/components/responses/PayloadTooLarge'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+        '500': {$ref: '#/components/responses/InternalError'}
+    get:
+      tags: [Jobs]
+      summary: List jobs
+      description: Newest first, with keyset (cursor) pagination.
+      operationId: listJobs
+      parameters:
+        - {name: status, in: query, schema: {$ref: '#/components/schemas/JobStatus'}}
+        - {name: type, in: query, schema: {type: string, maxLength: 64}}
+        - {name: queue, in: query, schema: {type: string, enum: [high, normal, low]}}
+        - {name: dead_lettered, in: query, schema: {type: boolean}}
+        - {name: created_after, in: query, schema: {type: string, format: date-time}, description: Inclusive lower bound.}
+        - {name: created_before, in: query, schema: {type: string, format: date-time}, description: Exclusive upper bound.}
+        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 100, default: 20}}
+        - {name: cursor, in: query, schema: {type: string}, description: '`next_cursor` from the previous page.'}
+      responses:
+        '200':
+          description: A page of jobs.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items: {$ref: '#/components/schemas/Job'}
+                  next_cursor:
+                    type: string
+                    description: Absent on the last page.
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+  /api/v1/jobs/{id}:
+    get:
+      tags: [Jobs]
+      summary: Get a job
+      operationId: getJob
+      parameters: [{$ref: '#/components/parameters/JobID'}]
+      responses:
+        '200':
+          description: The job.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Job'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /api/v1/jobs/{id}/retry:
+    post:
+      tags: [Jobs]
+      summary: Manually retry a failed or cancelled job
+      description: |
+        Moves a `failed` (dead-lettered) or `cancelled` job back to `pending`
+        and grants it `additional_attempts` more attempts (default: the
+        server's default max attempts). Attempt history is preserved.
+      operationId: retryJob
+      parameters: [{$ref: '#/components/parameters/JobID'}]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                additional_attempts: {type: integer, minimum: 1, maximum: 100}
+      responses:
+        '200':
+          description: Job re-submitted.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Job'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/InvalidState'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+  /api/v1/jobs/{id}/cancel:
+    post:
+      tags: [Jobs]
+      summary: Cancel a job
+      description: |
+        - `pending`/`queued` jobs are cancelled immediately (`200`).
+        - `running` jobs get a cancellation request (`202`). The worker sees
+          it at its next heartbeat and cancels the handler's context. If the
+          handler completes first, the job ends `succeeded`. Completion and
+          cancellation are resolved atomically, so exactly one of them wins.
+        - Terminal jobs return `409`.
+      operationId: cancelJob
+      parameters: [{$ref: '#/components/parameters/JobID'}]
+      responses:
+        '200':
+          description: Job cancelled.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Job'}
+        '202':
+          description: Cancellation requested for a running job.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Job'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/InvalidState'}
+  /api/v1/jobs/{id}/attempts:
+    get:
+      tags: [Jobs]
+      summary: Execution history of a job
+      operationId: listAttempts
+      parameters: [{$ref: '#/components/parameters/JobID'}]
+      responses:
+        '200':
+          description: Attempts, oldest first.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items: {$ref: '#/components/schemas/Attempt'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /api/v1/queues:
+    get:
+      tags: [Operations]
+      summary: Queue, dead-letter, outbox and worker statistics
+      operationId: listQueues
+      responses:
+        '200':
+          description: Current statistics.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/QueuesResponse'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+  /api/v1/workers:
+    get:
+      tags: [Operations]
+      summary: Registered workers (most recent heartbeat first)
+      operationId: listWorkers
+      responses:
+        '200':
+          description: Workers.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: {$ref: '#/components/schemas/Worker'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+  /api/v1/job-types:
+    get:
+      tags: [Operations]
+      summary: Registered job types
+      operationId: listJobTypes
+      responses:
+        '200':
+          description: Job type names.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: {type: array, items: {type: string}}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+  /health:
+    get:
+      tags: [Probes]
+      summary: Liveness probe
+      security: []
+      responses:
+        '200':
+          description: The process is alive.
+          content:
+            application/json:
+              schema: {type: object, properties: {status: {type: string, example: ok}}}
+  /ready:
+    get:
+      tags: [Probes]
+      summary: Readiness probe (PostgreSQL and Redis reachable, not draining)
+      security: []
+      responses:
+        '200':
+          description: Ready.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Readiness'}
+        '503':
+          description: Not ready or draining.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Readiness'}
+  /metrics:
+    get:
+      tags: [Probes]
+      summary: Prometheus metrics
+      security: []
+      responses:
+        '200':
+          description: Prometheus text exposition format.
+          content:
+            text/plain: {schema: {type: string}}
+  /openapi.yaml:
+    get:
+      tags: [Probes]
+      summary: This document
+      security: []
+      responses:
+        '200':
+          description: OpenAPI document.
+          content:
+            application/yaml: {schema: {type: string}}
+components:
+  securitySchemes:
+    ApiKeyHeader: {type: apiKey, in: header, name: X-API-Key}
+    BearerAuth: {type: http, scheme: bearer}
+  headers:
+    RequestID:
+      description: Request correlation ID (echoed from the request if valid, otherwise generated).
+      schema: {type: string}
+  parameters:
+    JobID:
+      name: id
+      in: path
+      required: true
+      schema: {type: string, format: uuid}
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      description: Alternative to the `idempotency_key` body field (must match it if both are set).
+      schema: {type: string, maxLength: 255}
+  responses:
+    BadRequest:
+      description: Malformed JSON, unknown fields, bad query parameters or a malformed ID.
+      content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}
+    Unauthorized:
+      description: Missing or invalid API key.
+      content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}
+    NotFound:
+      description: Job not found.
+      content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}
+    InvalidState:
+      description: The operation is not allowed in the job's current status.
+      content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}
+    PayloadTooLarge:
+      description: Request body exceeds the configured limit.
+      content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}
+    ValidationFailed:
+      description: Semantically invalid request; `details` lists the offending fields.
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+          example:
+            error:
+              code: validation_failed
+              message: request validation failed
+              request_id: 9f2c4e1a7b3d5f6e8a0b1c2d
+              details:
+                - {field: priority, message: must be between 1 and 10}
+    InternalError:
+      description: Unexpected server error (details are logged, never returned).
+      content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}
+  schemas:
+    JobStatus:
+      type: string
+      enum: [pending, queued, running, succeeded, failed, cancelled]
+    CreateJobRequest:
+      type: object
+      additionalProperties: false
+      required: [type, payload]
+      properties:
+        type:
+          type: string
+          enum: [EMAIL_SIMULATION, WEBHOOK_SIMULATION, CPU_INTENSIVE_COMPUTATION, DELIBERATE_FAILURE, DELAYED_TASK]
+        payload:
+          type: object
+          description: Handler-specific input, validated at submission. See the payload schemas below.
+          oneOf:
+            - $ref: '#/components/schemas/EmailPayload'
+            - $ref: '#/components/schemas/WebhookPayload'
+            - $ref: '#/components/schemas/CPUPayload'
+            - $ref: '#/components/schemas/FailurePayload'
+            - $ref: '#/components/schemas/DelayedPayload'
+        priority:
+          type: integer
+          minimum: 1
+          maximum: 10
+          default: 5
+          description: 8-10 → high queue, 4-7 → normal, 1-3 → low. Queues are drained in strict priority order.
+        max_attempts: {type: integer, minimum: 1, maximum: 100, default: 3}
+        timeout_seconds: {type: integer, minimum: 1, maximum: 86400, default: 30, description: Per-attempt execution timeout.}
+        scheduled_at: {type: string, format: date-time, description: Earliest execution time (max one year ahead). Mutually exclusive with delay_seconds.}
+        delay_seconds: {type: integer, minimum: 0, maximum: 31536000}
+        idempotency_key: {type: string, maxLength: 255}
+    EmailPayload:
+      type: object
+      additionalProperties: false
+      required: [to, subject]
+      properties:
+        to: {type: string, format: email}
+        subject: {type: string, minLength: 1, maxLength: 200}
+        body: {type: string, maxLength: 65536}
+        simulate_latency_ms: {type: integer, minimum: 0, maximum: 60000, default: 50}
+    WebhookPayload:
+      type: object
+      additionalProperties: false
+      required: [url]
+      properties:
+        url: {type: string, format: uri}
+        method: {type: string, enum: [POST, PUT, PATCH], default: POST}
+        body: {description: Arbitrary JSON body.}
+        simulate_status: {type: integer, minimum: 100, maximum: 599, default: 200, description: 2xx succeeds; 408/429/5xx retry; other 4xx fail permanently.}
+        simulate_latency_ms: {type: integer, minimum: 0, maximum: 60000, default: 100}
+    CPUPayload:
+      type: object
+      additionalProperties: false
+      required: [operation, n]
+      properties:
+        operation: {type: string, enum: [prime_count, hash_chain]}
+        n: {type: integer, minimum: 1, maximum: 20000000}
+        seed: {type: string, maxLength: 1024, description: Only for hash_chain.}
+    FailurePayload:
+      type: object
+      additionalProperties: false
+      required: [mode]
+      properties:
+        mode: {type: string, enum: [always, until_attempt, permanent, panic]}
+        succeed_on_attempt: {type: integer, minimum: 2, maximum: 100, description: Required for until_attempt.}
+        message: {type: string, maxLength: 500}
+    DelayedPayload:
+      type: object
+      additionalProperties: false
+      required: [duration_ms]
+      properties:
+        duration_ms: {type: integer, minimum: 0, maximum: 3600000}
+        message: {type: string, maxLength: 1000}
+    Job:
+      type: object
+      required: [id, type, queue, payload, priority, status, attempts, max_attempts, timeout_seconds,
+                 scheduled_at, created_at, updated_at, cancel_requested, version]
+      properties:
+        id: {type: string, format: uuid, description: UUIDv7 (time-ordered).}
+        type: {type: string}
+        queue: {type: string, enum: [high, normal, low]}
+        payload: {type: object}
+        priority: {type: integer}
+        status: {$ref: '#/components/schemas/JobStatus'}
+        idempotency_key: {type: string}
+        attempts: {type: integer, description: Attempts started so far.}
+        max_attempts: {type: integer}
+        timeout_seconds: {type: integer}
+        scheduled_at: {type: string, format: date-time, description: Earliest time the next attempt may run (moves forward on retry).}
+        created_at: {type: string, format: date-time}
+        updated_at: {type: string, format: date-time}
+        queued_at: {type: string, format: date-time}
+        started_at: {type: string, format: date-time, description: Start of the most recent attempt.}
+        completed_at: {type: string, format: date-time}
+        worker_id: {type: string, description: Worker that ran the most recent attempt.}
+        lease_expires_at: {type: string, format: date-time}
+        cancel_requested: {type: boolean}
+        last_error: {type: string}
+        last_error_class:
+          type: string
+          enum: [error, permanent, timeout, panic, cancelled, interrupted, lease_lost, lease_expired, unknown_type]
+        result: {type: object, description: Handler output of the successful attempt.}
+        duration_ms: {type: integer, description: Duration of the most recent attempt.}
+        dead_lettered_at: {type: string, format: date-time}
+        version: {type: integer, description: Incremented on every state change.}
+    Attempt:
+      type: object
+      required: [id, job_id, attempt_number, worker_id, status, started_at]
+      properties:
+        id: {type: integer}
+        job_id: {type: string, format: uuid}
+        attempt_number: {type: integer}
+        worker_id: {type: string}
+        status: {type: string, enum: [running, succeeded, failed, cancelled, lost]}
+        started_at: {type: string, format: date-time}
+        finished_at: {type: string, format: date-time}
+        duration_ms: {type: integer}
+        error: {type: string}
+        error_class: {type: string}
+    QueuesResponse:
+      type: object
+      properties:
+        queues:
+          type: array
+          items:
+            type: object
+            properties:
+              name: {type: string}
+              stream: {type: string}
+              stream_length: {type: integer}
+              undelivered: {type: integer, description: Messages not yet delivered to any worker.}
+              unacknowledged: {type: integer, description: Delivered messages awaiting acknowledgement.}
+              consumers: {type: integer}
+              jobs:
+                type: object
+                properties:
+                  pending: {type: integer}
+                  queued: {type: integer}
+                  running: {type: integer}
+        dead_letter:
+          type: object
+          properties:
+            stream: {type: string}
+            stream_length: {type: integer}
+            jobs: {type: integer}
+        outbox:
+          type: object
+          properties:
+            backlog: {type: integer}
+            oldest_age_seconds: {type: number}
+        active_workers: {type: integer}
+    Worker:
+      type: object
+      properties:
+        id: {type: string}
+        hostname: {type: string}
+        pid: {type: integer}
+        concurrency: {type: integer}
+        status: {type: string, enum: [active, stopping, stopped, dead]}
+        version: {type: string}
+        started_at: {type: string, format: date-time}
+        last_heartbeat_at: {type: string, format: date-time}
+        stopped_at: {type: string, format: date-time}
+    Readiness:
+      type: object
+      properties:
+        status: {type: string, enum: [ready, not_ready, draining]}
+        checks:
+          type: object
+          properties:
+            database: {type: string, enum: [ok, unavailable]}
+            redis: {type: string, enum: [ok, unavailable]}
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              enum: [invalid_request, invalid_json, invalid_id, invalid_query, unauthorized, not_found,
+                     validation_failed, idempotency_conflict, invalid_state, payload_too_large,
+                     unavailable, internal_error]
+            message: {type: string}
+            request_id: {type: string}
+            details: {description: Optional structured details (e.g. field errors).}
