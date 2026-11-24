@@ -8,7 +8,7 @@
 # Runtime images are distroless (no shell, no package manager) and run as an
 # unprivileged user.
 
-ARG GO_VERSION=1.24
+ARG GO_VERSION=1.26.11
 FROM golang:${GO_VERSION}-alpine AS build
 WORKDIR /src
 ENV CGO_ENABLED=0 GOFLAGS=-trimpath

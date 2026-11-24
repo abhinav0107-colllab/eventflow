@@ -38,7 +38,7 @@ lint: fmt-check vet ## Run gofmt check, go vet and golangci-lint
 
 .PHONY: vuln
 vuln: ## Scan dependencies for known vulnerabilities
-	$(GO) run golang.org/x/vuln/cmd/govulncheck@v1.1.3 ./...
+	$(GO) run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
 
 ## ---- Tests ----
 .PHONY: test

@@ -100,7 +100,7 @@ decision, is in **[docs/architecture.md](docs/architecture.md)**.
 
 | | |
 |---|---|
-| Language | Go 1.24 (stdlib `net/http` routing, `log/slog`) |
+| Language | Go 1.26 (stdlib `net/http` routing, `log/slog`) |
 | Database | PostgreSQL 16 via `pgx/v5` (pooling) |
 | Broker | Redis 7.2 Streams via `go-redis/v9` (consumer groups) |
 | Metrics / dashboards | Prometheus client, Prometheus 2.54, Grafana 11.2 |

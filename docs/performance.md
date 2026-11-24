@@ -11,7 +11,7 @@ are written to `loadtest/results/*.json` (gitignored) when the scripts run.
 | Runtime | Docker 29.10, Docker Compose v2 |
 | Topology | Full `docker-compose.yml` stack: PostgreSQL 16 (`shared_buffers=256MB`, `synchronous_commit=on`, fsync on), Redis 7.2 (AOF `everysec`), 1 API container (outbox relay enabled, `DB_MAX_CONNS=40`), 2 worker containers × 16 concurrency (unless stated otherwise), Prometheus (5 s scrape), Grafana |
 | Load generator | k6 0.54 in Docker (`--network host`), **on the same 4 vCPUs** |
-| Build | Go 1.24, `CGO_ENABLED=0`, `-trimpath -ldflags "-s -w"` |
+| Build | Go 1.24.7, `CGO_ENABLED=0`, `-trimpath -ldflags "-s -w"` (measured before the security upgrade to Go 1.26.11; see the changelog note below) |
 | Date | 2026-11-23 |
 
 **Read these numbers as a lower bound.** The database, broker, API, workers,
@@ -154,3 +154,14 @@ make loadtest-submit            # see the command list above for the other scena
 Results vary with hardware. When comparing changes, run the same command on
 the same machine, with Prometheus and Grafana open, and watch the
 *EventFlow* dashboard for the cause of any regression.
+
+## Note: security upgrade after measurement
+
+The measurements above were taken with Go 1.24.7, pgx v5.7.1 and go-redis
+v9.7.0. The first CI run of `govulncheck` (which could not run in the
+development sandbox) then reported known vulnerabilities in the Go 1.24
+standard library (`crypto/tls`, `net/http`, `net/url`, ...), pgx, go-redis
+and `golang.org/x/text`. The project was upgraded to Go 1.26.11, pgx v5.9.2,
+go-redis v9.7.3 and `golang.org/x/text` v0.39.0. The full unit and
+integration suites were re-run on the upgraded build. The load tests were not
+repeated, because the upgrade changes no EventFlow code paths.
