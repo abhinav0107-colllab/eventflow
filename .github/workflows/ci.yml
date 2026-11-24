@@ -21,8 +21,8 @@ jobs:
     name: Lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version: ${{ env.GO_VERSION }}
       - name: gofmt
@@ -31,7 +31,7 @@ jobs:
         run: make vet
       - name: go mod tidy is clean
         run: go mod tidy && git diff --exit-code go.mod go.sum
-      - uses: golangci/golangci-lint-action@v8
+      - uses: golangci/golangci-lint-action@v9
         with:
           version: v2.15.0
       - name: govulncheck
@@ -41,8 +41,8 @@ jobs:
     name: Unit tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version: ${{ env.GO_VERSION }}
       - run: go test -race -count=1 -coverprofile=unit.out ./...
@@ -53,8 +53,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version: ${{ env.GO_VERSION }}
       - name: Run integration suite against real PostgreSQL and Redis
@@ -69,7 +69,7 @@ jobs:
     needs: [unit]
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Generate throwaway secrets
         run: make env
       - name: Build and start the stack

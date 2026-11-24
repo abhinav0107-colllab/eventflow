@@ -162,6 +162,6 @@ v9.7.0. The first CI run of `govulncheck` (which could not run in the
 development sandbox) then reported known vulnerabilities in the Go 1.24
 standard library (`crypto/tls`, `net/http`, `net/url`, ...), pgx, go-redis
 and `golang.org/x/text`. The project was upgraded to Go 1.26.11, pgx v5.9.2,
-go-redis v9.7.3 and `golang.org/x/text` v0.39.0. The full unit and
+go-redis v9.7.3, `golang.org/x/text` v0.41.0 and `klauspost/compress` v1.20.5. The full unit and
 integration suites were re-run on the upgraded build. The load tests were not
 repeated, because the upgrade changes no EventFlow code paths.
