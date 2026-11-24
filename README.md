@@ -107,6 +107,7 @@ decision, is in **[docs/architecture.md](docs/architecture.md)**.
 | Testing | Go testing, Testcontainers-go (real PostgreSQL and Redis), race detector |
 | Load testing | k6 |
 | Packaging | Docker multi-stage builds (distroless), Docker Compose |
+| Cloud | Terraform modules for AWS EC2 and GCP Compute Engine (single-VM demo deployment) |
 | CI | GitHub Actions (lint, vet, golangci-lint, govulncheck, unit, integration, Compose smoke test) |
 
 Direct dependencies are deliberately few: `pgx`, `go-redis`,
@@ -133,6 +134,13 @@ Scale workers with `docker compose up -d --scale worker=4`. Stop with
 `make down`. `make clean-stack` also **deletes** the data volumes.
 
 To run the binaries without Docker, see [docs/operations.md](docs/operations.md#running).
+
+### Deploy to AWS or GCP
+
+Terraform modules in `deploy/terraform/aws` and `deploy/terraform/gcp`
+provision a free-tier-sized VM that runs the same stack. Only SSH and the API
+are exposed, and only to your IP; secrets are generated on the VM. Step-by-step
+guide (Windows PowerShell commands included): **[docs/deployment.md](docs/deployment.md)**.
 
 ## API at a glance
 
@@ -337,12 +345,12 @@ internal/observability    slog JSON logger, Prometheus metrics
 internal/outbox           outbox insertion + relay
 internal/worker           worker engine, registry, recovery manager
 migrations/               versioned SQL (embedded)
-deploy/                   Dockerfile, PostgreSQL role bootstrap
+deploy/                   Dockerfile, PostgreSQL role bootstrap, cloud bootstrap, Terraform (AWS, GCP)
 monitoring/               Prometheus config + alerts, Grafana provisioning + dashboard
 loadtest/                 k6 scripts (results/ is gitignored)
 scripts/                  smoke test, drain benchmark, dashboard generator
 tests/integration/        Testcontainers integration + failure tests
-docs/                     architecture, API guide, operations, performance
+docs/                     architecture, API guide, operations, performance, cloud deployment
 ```
 
 ## Known limitations

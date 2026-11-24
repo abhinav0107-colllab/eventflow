@@ -23,3 +23,11 @@ loadtest/results/*.json
 .vscode/
 *.swp
 .DS_Store
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+terraform.tfvars
+*.auto.tfvars
+crash.log

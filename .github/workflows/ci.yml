@@ -63,6 +63,25 @@ jobs:
         if: always()
         run: grep -E '^(--- |ok|FAIL)' integration.log || true
 
+  infra:
+    name: Terraform (AWS + GCP) and shell scripts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.16.7
+      - name: terraform fmt
+        run: terraform fmt -check -recursive deploy/terraform
+      - name: terraform validate (aws, gcp)
+        run: |
+          for dir in deploy/terraform/aws deploy/terraform/gcp; do
+            terraform -chdir="$dir" init -backend=false -input=false
+            terraform -chdir="$dir" validate
+          done
+      - name: shellcheck
+        run: shellcheck deploy/cloud/bootstrap.sh deploy/postgres/init-roles.sh scripts/*.sh
+
   compose-smoke:
     name: Docker build + Compose smoke test
     runs-on: ubuntu-latest
